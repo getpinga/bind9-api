@@ -11,7 +11,7 @@ $api->any('/', function ($requst) {
     return 'BIND9 API v0.5.0';
 });
 
-$api->post('/zone/create', function ($zone, $ns1, $ns2, $email) use ($named_conf) {
+$api->post('/zone/create', function ($zone, $email, $nameservers) use ($named_conf) {
     $zone_file = '/root/zones/' . $zone;
     $template = '$TTL    86400
 @       IN      SOA     ns1.' . $zone . '. ' . $email . ' (
@@ -20,11 +20,20 @@ $api->post('/zone/create', function ($zone, $ns1, $ns2, $email) use ($named_conf
                         1800       ; retry
                         604800     ; expire
                         86400 )    ; minimum
-        IN      NS      ns1.' . $zone . '
-        IN      NS      ns2.' . $zone . '
-ns1     IN      A       ' . $ns1 . '
-ns2     IN      A       ' . $ns2 . '
 ';
+    $valid_nameservers = array();
+    foreach ($nameservers as $i => $nameserver) {
+        if (filter_var($nameserver, FILTER_VALIDATE_IP)) {
+            $valid_nameservers[] = $nameserver;
+        }
+    }
+    if (count($valid_nameservers) < 2) {
+        return json_encode(['code'=>1, 'message' => "Error: At least 2 valid nameservers are required."]);
+    }
+    foreach ($valid_nameservers as $i => $nameserver) {
+        $template .= '        IN      NS      ns' . ($i+1) . '.' . $zone . '.' . PHP_EOL;
+        $template .= 'ns' . ($i+1) . '     IN      A       ' . $nameserver . PHP_EOL;
+    }
     if (file_exists($zone_file)) {
         return json_encode(['code'=>1, 'message' => "Error: Zone $zone already exists."]);
     }
@@ -34,7 +43,7 @@ ns2     IN      A       ' . $ns2 . '
         file "' . $zone_file . '";
     };
 ';
-	exec('rndc addzone ' . $zone . ' ' . escapeshellarg($zone_config), $output, $return_var);
+    exec('rndc addzone ' . $zone . ' ' . escapeshellarg($zone_config), $output, $return_var);
     if ($return_var != 0) {
         return json_encode(['code'=>1, 'message' => "Error: Failed to add zone $zone. Error: " . implode("\n", $output)]);
     }
