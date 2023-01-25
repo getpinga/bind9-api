@@ -23,6 +23,11 @@ $api->post('/zone', function ($request) use ($named_conf) {
     }
     $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
     $email = htmlspecialchars($result['email'], ENT_QUOTES, 'utf-8');
+    if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $email = str_replace("@", ".", $email);
+    } else {
+        throw new Exception('Invalid email address');
+    }
     $nameservers = $result['nameservers'];
     foreach ($nameservers as $key => $value) {
         $nameservers[$key] = htmlspecialchars($value, ENT_QUOTES, 'utf-8');
@@ -86,7 +91,7 @@ $api->post('/zone', function ($request) use ($named_conf) {
 });
 
 $api->delete('/zone', function ($request) use ($named_conf) {
-    $result = $request->DELETE();
+    $result = $request->post();
     if (!array_key_exists('zone', $result)) {
         throw new Exception('Missing required parameter: zone');
     }
@@ -109,8 +114,8 @@ $api->delete('/zone', function ($request) use ($named_conf) {
 
 $api->post('/record', function ($request) {
     $result = $request->post();
-    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('type', $value)) {
-        throw new Exception('Missing required parameter: zone, email or nameservers');
+    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('value', $result)) {
+        throw new Exception('Missing required parameter: zone, record, type or value');
     }
     $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
     $record = htmlspecialchars($result['record'], ENT_QUOTES, 'utf-8');
@@ -147,9 +152,9 @@ $api->post('/record', function ($request) {
 });
 
 $api->delete('/record', function ($request) {
-    $result = $request->delete();
-    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('type', $value)) {
-        throw new Exception('Missing required parameter: zone, email or nameservers');
+    $result = $request->post();
+    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('value', $result)) {
+        throw new Exception('Missing required parameter: zone, record, type or value');
     }
     $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
     $record = htmlspecialchars($result['record'], ENT_QUOTES, 'utf-8');
