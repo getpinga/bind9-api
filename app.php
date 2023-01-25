@@ -1,20 +1,36 @@
 <?php
+
 use Mark\App;
 
 require 'vendor/autoload.php';
 $named_conf = '/root/zones/named.conf';
 
-$api = new App('http://127.0.0.1:3000');
+$api = new App('http://0.0.0.0:3000');
 $api->count = 1; // process count
 
 $api->any('/', function ($requst) {
-    return 'BIND9 API v0.5.0';
+    return 'BIND9 API v0.6.0';
 });
 
-$api->post('/zone/create', function ($zone, $email, $nameservers) use ($named_conf) {
+$api->get('/zone/{zone}', function ($request, $zone) {
+    return "Hello $zone";
+});
+
+$api->post('/zone', function ($request) use ($named_conf) {
+    $result = $request->post();
+    if (!array_key_exists('zone', $result) || !array_key_exists('email', $result) || !array_key_exists('nameservers', $result)) {
+        throw new Exception('Missing required parameter: zone, email or nameservers');
+    }
+    $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
+    $email = htmlspecialchars($result['email'], ENT_QUOTES, 'utf-8');
+    $nameservers = $result['nameservers'];
+    foreach ($nameservers as $key => $value) {
+        $nameservers[$key] = htmlspecialchars($value, ENT_QUOTES, 'utf-8');
+    }
+
     $zone_file = '/root/zones/' . $zone;
     $template = '$TTL    86400
-@       IN      SOA     ns1.' . $zone . '. ' . $email . ' (
+@       IN      SOA     ' . $nameservers[0] . '. ' . $email . ' (
                         ' . time() . ' ; serial
                         3600       ; refresh
                         1800       ; retry
@@ -23,21 +39,39 @@ $api->post('/zone/create', function ($zone, $email, $nameservers) use ($named_co
 ';
     $valid_nameservers = array();
     foreach ($nameservers as $i => $nameserver) {
-        if (filter_var($nameserver, FILTER_VALIDATE_IP)) {
+        if (filter_var($nameserver, FILTER_VALIDATE_DOMAIN)) {
             $valid_nameservers[] = $nameserver;
         }
     }
-    if (count($valid_nameservers) < 2) {
-        return json_encode(['code'=>1, 'message' => "Error: At least 2 valid nameservers are required."]);
+
+    if (count($valid_nameservers) < 2 || count($valid_nameservers) > 13) {
+        return json_encode(['code'=>1, 'message' => "Error: At least 2 and at most 13 valid nameservers are required."]);
     }
+
     foreach ($valid_nameservers as $i => $nameserver) {
-        $template .= '        IN      NS      ns' . ($i+1) . '.' . $zone . '.' . PHP_EOL;
-        $template .= 'ns' . ($i+1) . '     IN      A       ' . $nameserver . PHP_EOL;
+        if (strpos($nameserver, $zone) !== false) {
+            $template .= '@        IN      NS      ns' . ($i+1) . '.' . $zone . '.' . PHP_EOL;
+            $template .= 'ns' . ($i+1) . '     IN      A       ' . $nameserver . PHP_EOL;
+        } else {
+            $template .= '@        IN      NS       ' . $nameserver . '.' . PHP_EOL;
+        }
     }
     if (file_exists($zone_file)) {
         return json_encode(['code'=>1, 'message' => "Error: Zone $zone already exists."]);
     }
-    file_put_contents($zone_file, $template);
+
+    try {
+        // Check the file name
+        if (preg_match('/[^a-zA-Z0-9\.\-_]/', basename($zone_file))) {
+            throw new Exception("Invalid file name.");
+        }
+        // Check the template data
+        $template = strip_tags($template);
+        file_put_contents($zone_file, $template);
+    } catch (Exception $e) {
+        return json_encode(['code'=>1, 'message' => $e->getMessage()]);
+    }
+
     $zone_config = 'zone "' . $zone . '" {
         type master;
         file "' . $zone_file . '";
@@ -51,7 +85,13 @@ $api->post('/zone/create', function ($zone, $email, $nameservers) use ($named_co
     return json_encode(['code'=>0 ,'message' => "Zone $zone created successfully."]);
 });
 
-$api->post('/zone/delete', function ($zone) use ($named_conf) {
+$api->delete('/zone', function ($request) use ($named_conf) {
+    $result = $request->DELETE();
+    if (!array_key_exists('zone', $result)) {
+        throw new Exception('Missing required parameter: zone');
+    }
+    $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
+
     $zone_file = '/root/zones/' . $zone;
     // remove the zone file
     unlink($zone_file);
@@ -67,63 +107,81 @@ $api->post('/zone/delete', function ($zone) use ($named_conf) {
     return json_encode(['code'=>0 ,'message' => "Zone $zone deleted successfully."]);
 });
 
-$api->post('/record/create', function ($zone, $record, $type, $value) {
-	$zone_file = '/root/zones/' . $zone;
+$api->post('/record', function ($request) {
+    $result = $request->post();
+    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('type', $value)) {
+        throw new Exception('Missing required parameter: zone, email or nameservers');
+    }
+    $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
+    $record = htmlspecialchars($result['record'], ENT_QUOTES, 'utf-8');
+    $type = htmlspecialchars($result['type'], ENT_QUOTES, 'utf-8');
+    $value = htmlspecialchars($result['value'], ENT_QUOTES, 'utf-8');
 
-	// Check if the zone file exists
-	if (!file_exists($zone_file)) {
-		echo "Error: Zone file not found.\n";
-		return;
-	}
+    $zone_file = '/root/zones/' . $zone;
 
-	// Check if the record already exists in the zone file
-	$zone_contents = file_get_contents($zone_file);
-	if (strpos($zone_contents, "$record\tIN\t$type\t$value") !== false) {
-		echo "Error: Record already exists.\n";
-		return;
-	}
+    // Check if the zone file exists
+    if (!file_exists($zone_file)) {
+        echo "Error: Zone file not found.\n";
+        return;
+    }
 
-	// Construct the new DNS record
-	$new_record = "$record\tIN\t$type\t$value\n";
+    // Check if the record already exists in the zone file
+    $zone_contents = file_get_contents($zone_file);
+    if (strpos($zone_contents, "$record\tIN\t$type\t$value") !== false) {
+        echo "Error: Record already exists.\n";
+        return;
+    }
 
-	// Append the new record to the zone file, add new line
-	$zone_contents = rtrim($zone_contents) . PHP_EOL . $new_record;
+    // Construct the new DNS record
+    $new_record = "$record\tIN\t$type\t$value\n";
 
-	// Write the updated contents back to the zone file
-	file_put_contents($zone_file, $zone_contents);
+    // Append the new record to the zone file, add new line
+    $zone_contents = rtrim($zone_contents) . PHP_EOL . $new_record;
 
-	// Reload the BIND service to apply the changes
-	exec('rndc reload');
+    // Write the updated contents back to the zone file
+    file_put_contents($zone_file, $zone_contents);
+
+    // Reload the BIND service to apply the changes
+    exec('rndc reload');
     return json_encode(['code'=>0 ,'message' => "Record $record for $zone created successfully."]);
 });
 
-$api->post('/record/delete', function ($zone, $record, $type, $value) {
-	$zone_file = '/root/zones/' . $zone;
+$api->delete('/record', function ($request) {
+    $result = $request->delete();
+    if (!array_key_exists('zone', $result) || !array_key_exists('record', $result) || !array_key_exists('type', $result) || !array_key_exists('type', $value)) {
+        throw new Exception('Missing required parameter: zone, email or nameservers');
+    }
+    $zone = htmlspecialchars($result['zone'], ENT_QUOTES, 'utf-8');
+    $record = htmlspecialchars($result['record'], ENT_QUOTES, 'utf-8');
+    $type = htmlspecialchars($result['type'], ENT_QUOTES, 'utf-8');
+    $value = htmlspecialchars($result['value'], ENT_QUOTES, 'utf-8');
 
-	// Check if the zone file exists
-	if (!file_exists($zone_file)) {
-		echo "Error: Zone file not found.\n";
-		return;
-	}
+    $zone_file = '/root/zones/' . $zone;
 
-	// Read the current contents of the zone file
-	$zone_contents = file_get_contents($zone_file);
+    // Check if the zone file exists
+    if (!file_exists($zone_file)) {
+        echo "Error: Zone file not found.\n";
+        return;
+    }
 
-	// Construct the DNS record to be removed
-	$record_to_remove = "$record\tIN\t$type\t$value\n";
+    // Read the current contents of the zone file
+    $zone_contents = file_get_contents($zone_file);
 
-	// Remove the record from the zone file
-	$zone_contents = str_replace($record_to_remove, "", $zone_contents);
-	// check if the record is not existing in the zone file
-	if($zone_contents === file_get_contents($zone_file)){
-		echo "Error: Record not found.\n";
-		return;
-	}
-	// Write the updated contents back to the zone file
-	file_put_contents($zone_file, $zone_contents);
+    // Construct the DNS record to be removed
+    $record_to_remove = "$record\tIN\t$type\t$value\n";
 
-	// Reload the BIND service to apply the changes
-	exec('rndc reload');
+    // Remove the record from the zone file
+    $zone_contents = str_replace($record_to_remove, "", $zone_contents);
+    // check if the record is not existing in the zone file
+    if ($zone_contents === file_get_contents($zone_file)) {
+        echo "Error: Record not found.\n";
+        return;
+    }
+    // Write the updated contents back to the zone file
+    file_put_contents($zone_file, $zone_contents);
+
+    // Reload the BIND service to apply the changes
+    exec('rndc reload');
     return json_encode(['code'=>0 ,'message' => "Record $record for $zone created successfully."]);
 });
 
